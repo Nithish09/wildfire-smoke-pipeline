@@ -33,7 +33,7 @@ weather into a county-day Gold table (Bronze → Silver → Gold, incremental, w
 **2. Download the raw data on a laptop**
 ```bash
 pip install requests
-export FIRMS_MAP_KEY=... AQS_EMAIL=... AQS_KEY=... NOAA_TOKEN=...
+cp .env.example .env      # then open .env and fill in your keys; .env is git-ignored and never committed
 python tools/download_sources.py --start 2020-08-15 --end 2020-08-21 --out raw --skip-bulk   # first week, quick test
 python tools/download_sources.py --start 2020-08-15 --end 2020-09-30 --out raw               # full window + EPA bulk CSV
 ```

@@ -6,10 +6,7 @@ Why outside Databricks? Free Edition limits outbound internet to trusted domains
 
 Usage:
     pip install requests
-    export FIRMS_MAP_KEY=...        # https://firms.modaps.eosdis.nasa.gov/api/map_key/
-    export AQS_EMAIL=you@uni.edu    # sign up: https://aqs.epa.gov/data/api/signup?email=you@uni.edu
-    export AQS_KEY=...
-    export NOAA_TOKEN=...           # https://www.ncdc.noaa.gov/cdo-web/token
+    cp .env.example .env            # then put your own keys in .env (it is git-ignored, never committed)
     python tools/download_sources.py --start 2020-08-15 --end 2020-09-30 --out raw
     python tools/download_sources.py --start 2020-08-15 --end 2020-08-21 --out raw   # a quick first week
 
@@ -23,6 +20,20 @@ FIRMS_SOURCE = "VIIRS_SNPP_SP"          # standard (science-quality) product for
 NOAA_ELEMENTS = ["TMAX", "TMIN", "PRCP", "AWND", "WDF2", "WSF2"]
 GAZETTEER = "https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2020_Gazetteer/2020_Gaz_counties_national.zip"
 EPA_BULK = "https://aqs.epa.gov/aqsweb/airdata/daily_88101_2020.zip"
+
+
+def load_env_file(path):
+    """Read KEY=value lines from a .env file into os.environ. Variables already set in the shell win."""
+    if not os.path.exists(path):
+        return
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip().removeprefix("export ").strip(), v.strip().strip('"').strip("'")
+        if v and not os.environ.get(k):
+            os.environ[k] = v
 
 
 def days(start, end):
@@ -147,9 +158,11 @@ if __name__ == "__main__":
     start, end = dt.date.fromisoformat(a.start), dt.date.fromisoformat(a.end)
     for sub in ["firms", "epa", "noaa", "reference", "epa_bulk"]:
         os.makedirs(os.path.join(a.out, sub), exist_ok=True)
+    load_env_file(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
     missing = [k for k in ["FIRMS_MAP_KEY", "AQS_EMAIL", "AQS_KEY", "NOAA_TOKEN"] if not os.environ.get(k)]
     if missing:
-        sys.exit(f"Set these environment variables first: {', '.join(missing)}")
+        sys.exit(f"Missing: {', '.join(missing)}. Copy .env.example to .env and fill in your keys "
+                 "(or export them in the terminal).")
     reference(start, end, a.out, a.force)
     for d in days(start, end):
         firms(d, a.out, a.force); epa(d, a.out, a.force); noaa(d, a.out, a.force)
