@@ -1,0 +1,25 @@
+flowchart LR
+  A[NASA FIRMS<br/>CSV · per UTC day] --> BF[bronze_firms]
+  B[EPA AQS<br/>JSON · per day] --> BE[bronze_epa_pm25]
+  C[NOAA GHCN-Daily<br/>JSON · per day] --> BN[bronze_noaa_daily]
+  BF --> SF[silver_fire_detections]
+  BE --> SE[silver_pm25_daily]
+  BN --> SW[silver_weather_daily]
+  SF --> F[gold_fact_county_day<br/>county × day]
+  SE --> F
+  SW --> F
+  F --> K[gold_kpi_state_day] --> DB[Dashboard<br/>+ reports]
+  subgraph Bronze["BRONZE · raw, append-only"]
+    BF
+    BE
+    BN
+  end
+  subgraph Silver["SILVER · validated, MERGE"]
+    SF
+    SE
+    SW
+  end
+  subgraph Gold["GOLD · star schema"]
+    F
+    K
+  end
