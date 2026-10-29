@@ -15,7 +15,7 @@ Usage:
 
 Re-running skips files that already exist (use --force to refetch, e.g. to test late revisions).
 """
-import argparse, csv, datetime as dt, io, json, os, sys, time, zipfile
+import argparse, csv, datetime as dt, io, json, os, re, sys, time, zipfile
 import requests
 
 CA_BBOX = "-124.5,32.5,-114.1,42.0"
@@ -73,8 +73,12 @@ def epa(day, out, force):
     r = get("https://aqs.epa.gov/data/api/dailyData/byState", params={
         "email": os.environ["AQS_EMAIL"], "key": os.environ["AQS_KEY"],
         "param": "88101", "bdate": ymd, "edate": ymd, "state": "06"})
-    open(path, "w", encoding="utf-8").write(r.text)
-    print(f"epa   {day}: {len(r.json().get('Data', []))} rows")
+    doc = r.json()
+    for h in doc.get("Header", []):            # AQS echoes the request URL, including email and key: remove them
+        if "url" in h:
+            h["url"] = re.sub(r"(email|key)=[^&]*", r"\1=REDACTED", h["url"])
+    json.dump(doc, open(path, "w", encoding="utf-8"))
+    print(f"epa   {day}: {len(doc.get('Data', []))} rows")
     time.sleep(5)                      # AQS asks callers to pause between requests
 
 
