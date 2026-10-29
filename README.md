@@ -25,31 +25,64 @@ weather into a county-day Gold table (Bronze → Silver → Gold, incremental, w
 
 ## How to run it (step by step)
 
-**1. Get keys (10 minutes, free)**
-* NASA FIRMS MAP_KEY: https://firms.modaps.eosdis.nasa.gov/api/map_key/
-* EPA AQS: open `https://aqs.epa.gov/data/api/signup?email=YOUR_EMAIL` – the key arrives by email
-* NOAA CDO token: https://www.ncdc.noaa.gov/cdo-web/token
+> **Just want to run the pipeline?** The first week of real data (15–21 Aug 2020) is already in `data/raw/`.
+> Skip to step 4 and upload those folders. Steps 1–2 are only needed to download more days.
 
-**2. Download the raw data on a laptop**
+**1. Get your own API keys (10 minutes, free; each person uses their own)**
+
+| Variable | What it is | Where to get it |
+| --- | --- | --- |
+| `FIRMS_MAP_KEY` | NASA FIRMS map key (32 characters) | https://firms.modaps.eosdis.nasa.gov/api/map_key/ |
+| `AQS_EMAIL` | The email you signed up to EPA AQS with | Your email address |
+| `AQS_KEY` | EPA AQS key (arrives by email) | Open `https://aqs.epa.gov/data/api/signup?email=YOUR_EMAIL` in a browser |
+| `NOAA_TOKEN` | NOAA Climate Data Online token (arrives by email) | https://www.ncdc.noaa.gov/cdo-web/token |
+
+`AQS_EMAIL` must be exactly the address you signed up with, or EPA answers `HTTP 400`. Only the newest EPA key works.
+
+**2. Put the keys in a `.env` file (one time)**
+
+From the project folder:
 ```bash
-pip install requests
-cp .env.example .env      # then open .env and fill in your keys; .env is git-ignored and never committed
-python tools/download_sources.py --start 2020-08-15 --end 2020-08-21 --out raw --skip-bulk   # first week, quick test
-python tools/download_sources.py --start 2020-08-15 --end 2020-09-30 --out raw               # full window + EPA bulk CSV
+cp .env.example .env     # make your private copy of the template
+open -e .env             # Mac (TextEdit). Windows: notepad .env
+```
+Fill in the values (no quotes, no spaces) and save:
+```
+FIRMS_MAP_KEY=your_nasa_key
+AQS_EMAIL=you@sjsu.edu
+AQS_KEY=your_epa_key
+NOAA_TOKEN=your_noaa_token
+```
+`.env` is in `.gitignore`, so it is never committed. **Never paste keys into code, notebooks, issues or the report.**
+The downloader reads `.env` automatically; a variable you `export` in the terminal takes priority over the file.
+
+**3. Download the raw data on a laptop**
+```bash
+pip3 install requests      # Mac: use pip3 / python3
+python3 tools/download_sources.py --start 2020-08-15 --end 2020-08-21 --out raw --skip-bulk   # first week, quick test
+python3 tools/download_sources.py --start 2020-08-15 --end 2020-09-30 --out raw               # full window + EPA bulk CSV
 ```
 The EPA API is slow on purpose (5 s pause per call), so the full window takes roughly 10–20 minutes.
+Re-running skips files you already have. The downloader removes your email and key from the EPA files before saving them.
 
-**3. Databricks Free Edition**
+| Error | Cause | Fix |
+| --- | --- | --- |
+| `Missing: ...` | A key is empty in `.env` | Fill it in and save `.env` |
+| EPA `HTTP 400` | Email and key don't match | Check `AQS_EMAIL`; request a new key if needed |
+| `command not found: python` (Mac) | Mac uses `python3` | Use `python3` / `pip3` |
+| `No matching distribution found for request` | Typo | The package is `requests` |
+
+**4. Databricks Free Edition**
 1. Workspace → *Import* → upload the files in `notebooks/` (they are Databricks source format).
 2. Run `01_setup`.
-3. Catalog → `workspace` → `wildfire` → volume `raw` → *Upload* the contents of your local `raw/` folder
+3. Catalog → `workspace` → `wildfire` → volume `raw` → *Upload* the contents of your local `raw/` folder (or the repo's `data/raw/`)
    (`firms/`, `epa/`, `noaa/`, `reference/`, `epa_bulk/`).
 4. Run `02_bronze` → `03_silver` → `04_gold`. Then `05_data_quality` and `06_benchmark_and_rerun`.
 5. To simulate *daily velocity*, upload one day of files at a time and rerun 02 → 04 after each upload,
    or run 02 with the widget `only_date = 2020-08-15`, then `2020-08-16`, …
 6. Optional: *Workflows → Create job* with tasks 02 → 03 → 04 to show a scheduled daily pipeline.
 
-**4. Test the logic without Databricks**
+**5. Test the logic without Databricks**
 ```bash
 pip install pandas numpy tabulate
 python tests/run_local_test.py        # builds synthetic data, runs 23 checks, writes tests/local_test_report.md
