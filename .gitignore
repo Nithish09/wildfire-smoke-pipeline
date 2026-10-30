@@ -3,3 +3,5 @@ __pycache__/
 /raw/
 .DS_Store
 .env
+research_data/
+research_out/

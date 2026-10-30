@@ -88,6 +88,11 @@ pip install pandas numpy tabulate
 python tests/run_local_test.py        # builds synthetic data, runs 23 checks, writes tests/local_test_report.md
 ```
 
+## Research extension (ML / DL, toward publication)
+`research/` forecasts next-day county PM2.5 and exceedances over four fire seasons (2018–2021) with a wind-aware fire-transport
+index, classical ML and deep learning (GRU, wind-graph ST-GNN). See `research/README.md` to run it and `docs/paper_draft.md` for the
+paper draft. Status: tested on synthetic data only; real-data results pending.
+
 ## Tables produced
 
 | Layer | Table | Grain |
