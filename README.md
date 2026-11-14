@@ -20,6 +20,7 @@ weather into a county-day Gold table (Bronze → Silver → Gold, incremental, w
 | `notebooks/05_data_quality.py` | Numbers for the data-quality report | 5 |
 | `notebooks/06_benchmark_and_rerun.py` | Step timings, CSV vs API, rerun test, late-data test | 5 |
 | `notebooks/07_dashboard_queries.sql` | Dashboard tiles | 5 |
+| `notebooks/08_fire_events.py` + `lib_fire_events.py` | Fire events: streaming connected components (2 km / 24 h) over detections; event summaries and county impact | 5 |
 | `tools/make_synthetic_data.py`, `tests/` | Synthetic test data + pandas reference test (23 checks) | any |
 | `docs/*_template.md` | Report, benchmark, data-quality and slide templates with `[FILL]` slots | 5–6 |
 
