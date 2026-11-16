@@ -10,6 +10,13 @@
 
 # COMMAND ----------
 
+SOURCE_FILE = "01_setup"
+
+def write_notebook_log(severity, message):
+    store_log(spark, severity, SOURCE_FILE, message)
+
+write_notebook_log("INFO", f"Initializing {CATALOG}.{SCHEMA} and the {VOLUME} volume")
+
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{SCHEMA}")
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {CATALOG}.{SCHEMA}.{VOLUME}")
 for sub in ["firms", "epa", "noaa", "reference", "epa_bulk"]:
@@ -30,4 +37,11 @@ CREATE TABLE IF NOT EXISTS {t('ops_step_log')} (
 ) USING DELTA
 """)
 
-display(dbutils.fs.ls(RAW_ROOT))
+write_notebook_log(
+    "INFO",
+    f"Created or verified landing folders and operational tables under {RAW_ROOT}",
+)
+write_notebook_log(
+    "INFO",
+    f"Setup completed for {CATALOG}.{SCHEMA}; run the extractors before Bronze ingestion",
+)

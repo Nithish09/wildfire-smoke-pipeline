@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 09 · Fire events (graph-stream algorithm)
 # MAGIC Turns individual FIRMS detections into **fire events** and links each event to the counties around it.
@@ -33,6 +37,9 @@
 import time
 from pyspark.sql import Window
 from pyspark.sql import functions as F
+from logging_utils import store_log
+
+SOURCE_FILE = "09_fire_events"
 
 dbutils.widgets.text("link_km", "2", "Link distance (km)")
 dbutils.widgets.text("link_hours", "24", "Link time window (hours)")
@@ -40,7 +47,6 @@ dbutils.widgets.text("impact_km", "150", "Max distance from event to county cent
 LINK_KM = float(dbutils.widgets.get("link_km"))
 LINK_HOURS = float(dbutils.widgets.get("link_hours"))
 IMPACT_KM = float(dbutils.widgets.get("impact_km"))
-print(f"link {LINK_KM} km / {LINK_HOURS} h, impact radius {IMPACT_KM} km")
 
 # COMMAND ----------
 
@@ -67,7 +73,6 @@ first_index = {}
 for k, e in enumerate(labels):
     first_index.setdefault(e, k)
 ids = {e: event_id(detections[k][3], rows[k].acq_ts_utc.date()) for e, k in first_index.items()}
-print(stats, f"in {time.time() - started:.1f}s")
 
 members = spark.createDataFrame(
     [(r.latitude, r.longitude, r.acq_ts_utc, r.satellite, ids[labels[k]]) for k, r in enumerate(rows)],
@@ -174,8 +179,15 @@ n_det = spark.table(t("silver_fire_detections")).where(F.col("acq_ts_utc").isNot
 n_mem = spark.table(t("silver_fire_event_members")).count()
 n_dup = n_mem - spark.table(t("silver_fire_event_members")).select(*KEY).distinct().count()
 ev = spark.table(t("gold_fire_events"))
-print(f"detections {n_det:,} | assigned {n_mem:,} | assigned twice {n_dup} | events {ev.count():,}")
-print("size classes:", {r.size_class: r["count"] for r in ev.groupBy("size_class").count().collect()})
+event_count = ev.count()
+size_classes = {r.size_class: r["count"] for r in ev.groupBy("size_class").count().collect()}
+store_log(
+    spark,
+    "INFO" if n_det == n_mem and n_dup == 0 else "ERROR",
+    SOURCE_FILE,
+    f"Event assignment check: detections={n_det:,}, assigned={n_mem:,}, "
+    f"duplicates={n_dup}, events={event_count:,}, size_classes={size_classes}.",
+)
 assert n_det == n_mem and n_dup == 0, "every detection must belong to exactly one event"
 
 # COMMAND ----------
@@ -185,38 +197,49 @@ assert n_det == n_mem and n_dup == 0, "every detection must belong to exactly on
 # COMMAND ----------
 
 # Largest events
-display(spark.sql(f"""
+largest_events = spark.sql(f"""
 SELECT event_id, event_label, first_day, last_day, active_days, detections, frp_total_mw, frp_max_mw,
        centroid_lat, centroid_lon, peak_day, size(counties_burned) AS counties_burned
-FROM {t('gold_fire_events')} ORDER BY detections DESC LIMIT 15"""))
+FROM {t('gold_fire_events')} ORDER BY detections DESC LIMIT 15""")
 
 # COMMAND ----------
 
 # Counties around the largest event: distance, wind alignment, PM2.5 that day and the next
-display(spark.sql(f"""
+top_event_counties = spark.sql(f"""
 WITH top AS (SELECT event_id FROM {t('gold_fire_events')} ORDER BY detections DESC LIMIT 1)
 SELECT i.county_name, count(*) AS days_within_radius, round(min(i.distance_km), 0) AS closest_km,
        sum(CASE WHEN i.event_upwind THEN 1 ELSE 0 END) AS days_event_upwind,
        round(avg(i.pm25_mean_ugm3), 1) AS avg_pm25_same_day, round(avg(i.pm25_next_day_ugm3), 1) AS avg_pm25_next_day
 FROM {t('gold_fire_event_county_impact')} i JOIN top USING (event_id)
-GROUP BY i.county_name ORDER BY days_within_radius DESC, closest_km"""))
+GROUP BY i.county_name ORDER BY days_within_radius DESC, closest_km""")
 
 # COMMAND ----------
 
 # Daily number of active events and total fire power (timeline)
-display(spark.sql(f"""
+event_timeline = spark.sql(f"""
 SELECT date_local, count(DISTINCT event_id) AS active_events,
        sum(CASE WHEN detections >= 50 THEN 1 ELSE 0 END) AS events_with_50plus_detections,
        round(sum(frp_total_mw), 0) AS total_frp_mw
-FROM {t('gold_fire_event_day')} GROUP BY date_local ORDER BY date_local"""))
+FROM {t('gold_fire_event_day')} GROUP BY date_local ORDER BY date_local""")
 
 # COMMAND ----------
 
 # Does PM2.5 depend on whether an event is upwind? (county-days with wind data only)
-display(spark.sql(f"""
+upwind_summary = spark.sql(f"""
 SELECT CASE WHEN event_upwind THEN 'event upwind' ELSE 'event not upwind' END AS wind_relation,
        count(*) AS county_event_days, round(avg(pm25_mean_ugm3), 1) AS avg_pm25_same_day,
        round(avg(pm25_next_day_ugm3), 1) AS avg_pm25_next_day
 FROM {t('gold_fire_event_county_impact')}
 WHERE event_upwind IS NOT NULL AND event_day_frp_mw >= 1000
-GROUP BY 1"""))
+GROUP BY 1""")
+
+store_log(
+    spark,
+    "INFO",
+    SOURCE_FILE,
+    "Prepared dashboard result sets: "
+    f"largest_events={largest_events.count():,}, "
+    f"top_event_counties={top_event_counties.count():,}, "
+    f"event_timeline={event_timeline.count():,}, "
+    f"upwind_summary={upwind_summary.count():,}.",
+)

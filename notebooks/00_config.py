@@ -13,6 +13,7 @@ import json
 from pyspark.sql import functions as F
 from pyspark.sql import Window
 from delta.tables import DeltaTable
+from logging_utils import store_log
 
 # --- Where things live (Databricks Free Edition uses the "workspace" catalog) ---
 CATALOG = "workspace"
@@ -54,6 +55,10 @@ def log_step(step, layer, rows, started, extra=None):
     row = [(step, layer, int(rows), float(elapsed), dt.datetime.utcnow(), json.dumps(extra or {}))]
     (spark.createDataFrame(row, "step string, layer string, rows long, seconds double, logged_at_utc timestamp, extra string")
           .write.mode("append").saveAsTable(t("ops_step_log")))
-    print(f"[{layer}] {step}: {rows:,} rows in {elapsed:.1f}s")
-
-print(f"Config loaded: {CATALOG}.{SCHEMA}, raw files in {RAW_ROOT}")
+    source_file = globals().get("SOURCE_FILE", f"{layer}.{step}")
+    store_log(
+        spark,
+        "INFO",
+        source_file,
+        f"{step} completed: {int(rows):,} rows in {elapsed:.1f}s",
+    )
