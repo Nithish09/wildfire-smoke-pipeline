@@ -10,6 +10,19 @@ USE workspace.wildfire;
 
 -- COMMAND ----------
 
+CREATE TABLE IF NOT EXISTS workspace.wildfire.log (
+  `timestamp` TIMESTAMP NOT NULL,
+  log_severity STRING NOT NULL,
+  source_file STRING NOT NULL,
+  log_message STRING NOT NULL
+) USING DELTA;
+
+INSERT INTO workspace.wildfire.log
+SELECT current_timestamp(), 'INFO', '07_dashboard_queries',
+       'Dashboard query notebook started.';
+
+-- COMMAND ----------
+
 -- Tile 1 · Statewide trend: fire activity vs average county PM2.5 (line chart, two y-axes)
 SELECT date_local, ca_fire_detections, ca_fire_frp_mw, avg_county_pm25_ugm3, counties_over_standard
 FROM gold_kpi_state_day ORDER BY date_local;
@@ -39,6 +52,12 @@ FROM gold_fact_county_day WHERE has_pm25;
 
 -- COMMAND ----------
 
+INSERT INTO workspace.wildfire.log
+SELECT current_timestamp(), 'INFO', '07_dashboard_queries',
+       'Dashboard trend, county, smoke, scatter, lag, and correlation queries are ready.';
+
+-- COMMAND ----------
+
 -- Tile 5 · Lagged view: PM2.5 today vs nearby fire radiative power yesterday (smoke takes time to arrive)
 SELECT f.county_fips, f.date_local, f.pm25_mean_ugm3,
        lag(f.fire_frp_within_100km_mw) OVER (PARTITION BY f.county_fips ORDER BY f.date_local) AS frp_100km_prev_day
@@ -60,3 +79,9 @@ SELECT round(corr(pm, frp), 3) AS corr_same_day, round(corr(pm, frp_lag1), 3) AS
 SELECT date_local, sum(CAST(has_pm25 AS INT)) AS counties_with_pm25, sum(CAST(has_weather AS INT)) AS counties_with_weather,
        count(*) AS counties
 FROM gold_fact_county_day GROUP BY date_local ORDER BY date_local;
+
+-- COMMAND ----------
+
+INSERT INTO workspace.wildfire.log
+SELECT current_timestamp(), 'INFO', '07_dashboard_queries',
+       'Dashboard query notebook completed successfully.';
