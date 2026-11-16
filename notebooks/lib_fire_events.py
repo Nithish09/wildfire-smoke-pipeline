@@ -1,7 +1,7 @@
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # Library · Fire events from the detection stream (graph-stream connected components)
-# MAGIC Loaded by `08_fire_events` with `%run ./lib_fire_events`. Pure Python, so it can be tested outside Databricks.
+# MAGIC Loaded by `09_fire_events` with `%run ./lib_fire_events`. Pure Python, so it can be tested outside Databricks.
 # MAGIC
 # MAGIC **Idea.** Treat every FIRMS detection as a node arriving in time order. When a detection arrives, add an edge to every
 # MAGIC earlier detection within `link_km` and `link_hours` (one pass, looking only at nearby grid cells and a sliding time window).

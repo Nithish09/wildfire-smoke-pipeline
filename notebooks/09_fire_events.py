@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 08 · Fire events (graph-stream algorithm)
+# MAGIC # 09 · Fire events (graph-stream algorithm)
 # MAGIC Turns individual FIRMS detections into **fire events** and links each event to the counties around it.
 # MAGIC
 # MAGIC **Algorithm (streaming connected components).** Detections are processed once, in time order. Each new detection is
