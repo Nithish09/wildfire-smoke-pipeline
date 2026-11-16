@@ -29,6 +29,11 @@
 
 # COMMAND ----------
 
+# Imports used below (also in 00_config; repeated so this notebook works with any version of it)
+import time
+from pyspark.sql import Window
+from pyspark.sql import functions as F
+
 dbutils.widgets.text("link_km", "2", "Link distance (km)")
 dbutils.widgets.text("link_hours", "24", "Link time window (hours)")
 dbutils.widgets.text("impact_km", "150", "Max distance from event to county centre for impact (km)")
