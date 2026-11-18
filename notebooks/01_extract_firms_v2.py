@@ -2,8 +2,9 @@
 # MAGIC %md
 # MAGIC # 01 · Extract NASA FIRMS
 # MAGIC
-# MAGIC Downloads California fire detections from NASA FIRMS using the
-# MAGIC VIIRS_SNPP_NRT product and writes one CSV file per acquisition date:
+# MAGIC Downloads California fire detections from NASA FIRMS using
+# MAGIC VIIRS_SNPP_NRT first and VIIRS_NOAA21_NRT as a fallback, then writes
+# MAGIC one CSV file per acquisition date:
 # MAGIC
 # MAGIC `/Volumes/workspace/wildfire/raw/firms/firms_YYYY-MM-DD.csv`
 # MAGIC
@@ -44,7 +45,8 @@ SCHEMA = "wildfire"
 RAW_FIRMS_ROOT = f"/Volumes/{CATALOG}/{SCHEMA}/raw/firms"
 
 FIRMS_ENDPOINT = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
-FIRMS_SOURCE = "VIIRS_SNPP_NRT"
+FIRMS_PRIMARY_SOURCE = "VIIRS_SNPP_NRT"
+FIRMS_FALLBACK_SOURCE = "VIIRS_NOAA21_NRT"
 CA_BBOX = (-124.5, 32.5, -114.1, 42.0)  # west, south, east, north
 LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 MAX_API_DAYS = 5  # FIRMS Area API limit
@@ -114,12 +116,12 @@ def latest_nonempty_firms_date(folder):
     return max(candidates) if candidates else None
 
 
-def fetch_firms_chunk(start_day, day_count):
+def fetch_firms_chunk(start_day, day_count, source):
     west, south, east, north = CA_BBOX
     bbox = ",".join(str(x) for x in (west, south, east, north))
     url = (
         f"{FIRMS_ENDPOINT}/{urllib.parse.quote(MAP_KEY, safe='')}/"
-        f"{FIRMS_SOURCE}/{bbox}/{day_count}/{start_day.isoformat()}"
+        f"{source}/{bbox}/{day_count}/{start_day.isoformat()}"
     )
     request = urllib.request.Request(
         url,
@@ -129,6 +131,12 @@ def fetch_firms_chunk(start_day, day_count):
         http_code = response.getcode()
         raw = response.read()
     return raw, http_code, url
+
+
+def parse_firms_response(raw):
+    text = raw.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    return text, reader.fieldnames or [], list(reader)
 
 
 def serialize_daily_rows(fieldnames, rows):
@@ -185,40 +193,68 @@ else:
 
 results = []
 current = start_date
+fallback_attempts = 0
+fallback_successes = 0
+empty_both_chunks = []
 while current <= end_date:
     chunk_days = min(MAX_API_DAYS, (end_date - current).days + 1)
+    chunk_end = current + timedelta(days=chunk_days - 1)
     try:
-        raw, http_code, url = fetch_firms_chunk(current, chunk_days)
-        text = raw.decode("utf-8-sig", errors="replace")
-        reader = csv.DictReader(io.StringIO(text))
-        fieldnames = reader.fieldnames or []
-        rows = list(reader)
+        raw, http_code, url = fetch_firms_chunk(
+            current, chunk_days, FIRMS_PRIMARY_SOURCE
+        )
+        text, fieldnames, rows = parse_firms_response(raw)
 
         if not fieldnames or not rows:
-            write_notebook_log("WARNING", f"FIRMS response body: {text[:4000]}")
-            results.append((str(current), chunk_days, http_code, 0, 0, "no_data", ""))
-        else:
-            rows_by_date = {}
-            for row in rows:
-                row_date = (row.get("acq_date") or "").strip()
-                if row_date:
-                    rows_by_date.setdefault(row_date, []).append(row)
+            fallback_attempts += 1
+            if fallback_attempts == 1:
+                write_notebook_log(
+                    "INFO",
+                    f"{FIRMS_PRIMARY_SOURCE} has no data for {current} through "
+                    f"{chunk_end}; switching to {FIRMS_FALLBACK_SOURCE}",
+                )
 
-            for day_text, day_rows in sorted(rows_by_date.items()):
-                day_rows.sort(
-                    key=lambda row: (
-                        row.get("acq_time", ""),
-                        row.get("latitude", ""),
-                        row.get("longitude", ""),
-                        row.get("satellite", ""),
-                    )
-                )
-                destination = f"{RAW_FIRMS_ROOT}/firms_{day_text}.csv"
-                daily_raw = serialize_daily_rows(fieldnames, day_rows)
-                changed = write_if_changed(destination, daily_raw)
+            fallback_raw, fallback_http_code, fallback_url = fetch_firms_chunk(
+                current, chunk_days, FIRMS_FALLBACK_SOURCE
+            )
+            fallback_text, fallback_fieldnames, fallback_rows = parse_firms_response(
+                fallback_raw
+            )
+
+            if not fallback_fieldnames or not fallback_rows:
+                empty_both_chunks.append((str(current), chunk_days))
                 results.append(
-                    (day_text, chunk_days, http_code, len(day_rows), int(changed), "success", "")
+                    (str(current), chunk_days, fallback_http_code, 0, 0, "no_data", "")
                 )
+                current += timedelta(days=chunk_days)
+                continue
+
+            fallback_successes += 1
+            http_code = fallback_http_code
+            fieldnames = fallback_fieldnames
+            rows = fallback_rows
+
+        rows_by_date = {}
+        for row in rows:
+            row_date = (row.get("acq_date") or "").strip()
+            if row_date:
+                rows_by_date.setdefault(row_date, []).append(row)
+
+        for day_text, day_rows in sorted(rows_by_date.items()):
+            day_rows.sort(
+                key=lambda row: (
+                    row.get("acq_time", ""),
+                    row.get("latitude", ""),
+                    row.get("longitude", ""),
+                    row.get("satellite", ""),
+                )
+            )
+            destination = f"{RAW_FIRMS_ROOT}/firms_{day_text}.csv"
+            daily_raw = serialize_daily_rows(fieldnames, day_rows)
+            changed = write_if_changed(destination, daily_raw)
+            results.append(
+                (day_text, chunk_days, http_code, len(day_rows), int(changed), "success", "")
+            )
         current += timedelta(days=chunk_days)
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:4000]
@@ -234,6 +270,15 @@ while current <= end_date:
         write_notebook_log("ERROR", f"FIRMS error: {exc}")
         results.append((str(current), chunk_days, 0, 0, 0, "error", str(exc)))
         current += timedelta(days=chunk_days)
+
+if empty_both_chunks:
+    first_date, first_chunk_days = empty_both_chunks[0]
+    write_notebook_log(
+        "WARNING",
+        f"{len(empty_both_chunks)} FIRMS chunk(s) returned no data from "
+        f"{FIRMS_PRIMARY_SOURCE} or {FIRMS_FALLBACK_SOURCE}; first chunk starts "
+        f"{first_date} and covers {first_chunk_days} day(s)",
+    )
 
 # COMMAND ----------
 
@@ -253,4 +298,13 @@ if errors:
     write_notebook_log("ERROR", error_message)
     raise RuntimeError(error_message)
 else:
-    write_notebook_log("INFO", f"FIRMS extraction completed with {len(results)} result row(s).")
+    fallback_note = (
+        f"; fallback used for {fallback_successes} chunk(s)"
+        if fallback_successes
+        else ""
+    )
+    write_notebook_log(
+        "INFO",
+        f"FIRMS extraction completed with {len(results)} result row(s)"
+        f"{fallback_note}.",
+    )

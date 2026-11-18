@@ -38,15 +38,137 @@ def canonical_key(record: Mapping[str, Any], source: str) -> str:
     return source + "|" + "|".join(encoded)
 
 
+class AugmentedKMV:
+    """Mergeable Augmented K-Minimum Values distinct-count sketch.
+
+    The sketch retains the ``k`` smallest unsigned 64-bit hashes.  The
+    augmentation is the occurrence count attached to every retained hash;
+    this is useful for diagnosing duplicate natural keys without retaining
+    the full input.  Hash collisions are negligible with SHA-256 truncated to
+    64 bits, but callers that require an exact constraint must still use an
+    exact check.
+    """
+
+    _HASH_SPACE = 1 << 64
+
+    def __init__(self, k: int = 2048):
+        if k < 2:
+            raise ValueError("k must be at least 2")
+        self.k = int(k)
+        self.total_count = 0
+        self._sample: dict[int, int] = {}
+        self._is_exact = True
+
+    @staticmethod
+    def hash64(value: Any) -> int:
+        digest = hashlib.sha256(_canonical(value).encode("utf-8")).digest()
+        return int.from_bytes(digest[:8], "big", signed=False)
+
+    def add(self, value: Any, occurrences: int = 1) -> "AugmentedKMV":
+        if occurrences < 1:
+            raise ValueError("occurrences must be positive")
+        self.total_count += int(occurrences)
+        hashed = self.hash64(value)
+        if hashed in self._sample:
+            self._sample[hashed] += int(occurrences)
+        elif len(self._sample) < self.k:
+            self._sample[hashed] = int(occurrences)
+        else:
+            self._is_exact = False
+            largest = max(self._sample)
+            if hashed < largest:
+                del self._sample[largest]
+                self._sample[hashed] = int(occurrences)
+        return self
+
+    def merge(self, other: "AugmentedKMV") -> "AugmentedKMV":
+        if self.k != other.k:
+            raise ValueError("AKMV sketches must use the same k")
+        self.total_count += other.total_count
+        combined = dict(self._sample)
+        for hashed, occurrences in other._sample.items():
+            combined[hashed] = combined.get(hashed, 0) + occurrences
+        merged_is_exact = self._is_exact and other._is_exact and len(combined) <= self.k
+        keep = sorted(combined)[:self.k]
+        self._sample = {hashed: combined[hashed] for hashed in keep}
+        self._is_exact = merged_is_exact
+        return self
+
+    @property
+    def retained_hashes(self) -> tuple[int, ...]:
+        return tuple(sorted(self._sample))
+
+    @property
+    def sampled_occurrences(self) -> int:
+        return sum(self._sample.values())
+
+    def estimate(self) -> int:
+        retained = len(self._sample)
+        if self._is_exact:
+            return retained
+        kth_fraction = max(self.retained_hashes[-1] / self._HASH_SPACE, 1 / self._HASH_SPACE)
+        return max(retained, round((self.k - 1) / kth_fraction))
+
+    def distinctness_pct(self) -> float:
+        if not self.total_count:
+            return 0.0
+        return min(100.0, 100.0 * self.estimate() / self.total_count)
+
+
 class BloomFilter:
-    """A deterministic Bloom filter. Never use it as the final dedup rule."""
+    """A deterministic, serializable Bloom filter.
+
+    The filter is an optimization only.  A positive result must still be
+    checked against the exact Delta key set; a negative result is safe only
+    while the persisted filter is known to cover the target-table snapshot.
+    """
 
     def __init__(self, expected_items: int, false_positive_rate: float = 0.01):
         if expected_items < 1 or not 0 < false_positive_rate < 1:
             raise ValueError("expected_items >= 1 and 0 < false_positive_rate < 1 required")
+        self.expected_items = int(expected_items)
+        self.false_positive_rate = float(false_positive_rate)
         self.size = max(8, math.ceil(-expected_items * math.log(false_positive_rate) / math.log(2) ** 2))
         self.hash_count = max(1, round(self.size / expected_items * math.log(2)))
         self.bits = bytearray((self.size + 7) // 8)
+
+    @classmethod
+    def from_bytes(
+        cls,
+        expected_items: int,
+        false_positive_rate: float,
+        size: int,
+        hash_count: int,
+        bits: bytes | bytearray,
+    ) -> "BloomFilter":
+        """Restore a filter without recalculating its layout."""
+        if expected_items < 1 or size < 8 or hash_count < 1:
+            raise ValueError("invalid persisted Bloom metadata")
+        if not 0 < false_positive_rate < 1:
+            raise ValueError("invalid persisted Bloom false-positive rate")
+        expected_bytes = (size + 7) // 8
+        if len(bits) != expected_bytes:
+            raise ValueError(
+                f"Bloom payload has {len(bits)} bytes; expected {expected_bytes}"
+            )
+        restored = cls.__new__(cls)
+        restored.expected_items = int(expected_items)
+        restored.false_positive_rate = float(false_positive_rate)
+        restored.size = int(size)
+        restored.hash_count = int(hash_count)
+        restored.bits = bytearray(bits)
+        return restored
+
+    def to_bytes(self) -> bytes:
+        return bytes(self.bits)
+
+    def estimated_false_positive_rate(self, inserted_items: int) -> float:
+        """Return the standard Bloom FPR estimate at the supplied load."""
+        if inserted_items <= 0:
+            return 0.0
+        return (1.0 - math.exp(
+            -self.hash_count * inserted_items / self.size
+        )) ** self.hash_count
 
     def _positions(self, value: str) -> Iterator[int]:
         digest = hashlib.sha256(value.encode("utf-8")).digest()

@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 03 · Part 2: row-level incremental null count + row count (Change Data Feed)
 # MAGIC When a row is updated in place by MERGE, Change Data Feed (CDF) records its old and new version:
@@ -23,7 +27,7 @@
 
 SOURCE_FILE = "03_dq_rowlevel_cdf"
 
-dbutils.widgets.text("columns", "aqi", "Columns to null-count (comma separated)")
+dbutils.widgets.text("columns", "pm25_ugm3", "Columns to null-count (comma separated)")
 dbutils.widgets.dropdown("reinit", "false", ["false", "true"], "Rebuild state with a full scan")
 dbutils.widgets.dropdown("verify", "true", ["true", "false"], "Assert against a full scan")
 
@@ -169,3 +173,15 @@ if VERIFY:
 
 # COMMAND ----------
 
+display(
+    spark.createDataFrame(
+        result,
+        "column string, rows_cdf long, rows_full long, "
+        "nulls_cdf long, nulls_full long, match boolean"
+    )
+)
+
+assert all(r[-1] for r in result), \
+    "Row-level counts do not match the full scan"
+
+print("OK: row-level counts match the full scan")

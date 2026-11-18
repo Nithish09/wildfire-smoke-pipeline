@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 02 · Part 1: Deequ-style incremental null count + row count
 # MAGIC Mimics the incremental logic in Schelter et al. (VLDB 2018), the paper behind Deequ / PyDeequ:
@@ -17,18 +21,23 @@
 
 # COMMAND ----------
 
-SOURCE_FILE = "02_dq_deequ_style"
-
-dbutils.widgets.text("columns", "aqi", "Columns to null-count (comma separated)")
+dbutils.widgets.text("table", TEST_TABLE, "Silver table to validate")
+dbutils.widgets.text("columns", "pm25_ugm3", "Columns to null-count (comma separated)")
 dbutils.widgets.dropdown("reset", "false", ["false", "true"], "Clear state and start again")
 dbutils.widgets.dropdown("verify", "true", ["true", "false"], "Compare with a full scan")
 
+TABLE  = dbutils.widgets.get("table")
 COLS   = [c.strip() for c in dbutils.widgets.get("columns").split(",") if c.strip()]
 RESET  = dbutils.widgets.get("reset") == "true"
 VERIFY = dbutils.widgets.get("verify") == "true"
-TABLE  = TEST_TABLE
 STATE  = dq("dq_deequ_state")
 WATERMARK_COL = "_ingested_at_utc"
+
+if not spark.catalog.tableExists(TABLE):
+    raise ValueError(f"Deequ source table does not exist: {TABLE}")
+missing = sorted(set(COLS) - set(spark.table(TABLE).columns))
+if missing:
+    raise ValueError(f"Deequ columns are missing from {TABLE}: {missing}")
 
 spark.sql(f"""
   CREATE TABLE IF NOT EXISTS {STATE} (
@@ -85,7 +94,7 @@ inc = increment.agg(
 
 # 3) Merge = add increment state to stored state
 if inc["_rows"] == 0:
-    store_log(spark, "INFO", SOURCE_FILE, "No new rows since the last run.")
+    print("No new rows since the last run.")
 else:
     save_state([
         (TABLE, c,
@@ -94,17 +103,10 @@ else:
          inc["_max_wm"])
         for c in COLS
     ])
-    store_log(
-        spark,
-        "INFO",
-        SOURCE_FILE,
-        f"Added increment of {inc['_rows']:,} rows: "
-        + ", ".join(f"{c} nulls +{inc[c]}" for c in COLS),
-    )
+    print(f"Added increment of {inc['_rows']:,} rows: " + ", ".join(f"{c} nulls +{inc[c]}" for c in COLS))
 
 log_step("dq_deequ_incremental", "dq", inc["_rows"], started, {"columns": COLS})
-state_rows = spark.table(STATE).where(F.col("table_name") == TABLE).count()
-store_log(spark, "INFO", SOURCE_FILE, f"Stored incremental DQ state for {state_rows} column(s).")
+display(spark.table(STATE).where(F.col("table_name") == TABLE))
 
 # COMMAND ----------
 
@@ -121,10 +123,6 @@ if VERIFY:
                int(state[c].row_count), int(full["_rows"]), int(state[c].row_count) - int(full["_rows"]),
                int(state[c].null_count), int(full[c]), int(state[c].null_count) - int(full[c]))
               for c in COLS]
-    drift_count = sum(1 for row in result if row[3] != 0 or row[6] != 0)
-    store_log(
-        spark,
-        "INFO" if drift_count == 0 else "WARNING",
-        SOURCE_FILE,
-        f"Full-scan verification completed: columns={len(result)}, drifted_columns={drift_count}.",
-    )
+    display(spark.createDataFrame(result,
+        "column string, rows_deequ long, rows_full long, rows_drift long, "
+        "nulls_deequ long, nulls_full long, nulls_drift long"))
