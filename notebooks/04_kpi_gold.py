@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "6"
+# ///
 # MAGIC %md
 # MAGIC # 04 · Gold: star schema + county-day fact table
 # MAGIC * `gold_dim_county`, `gold_dim_date` – dimensions
@@ -18,6 +22,14 @@
 
 # COMMAND ----------
 
+# The DQ gate is created by 03_dq_quality_gate.py.  Keep these names here
+# instead of loading 00_dq_config, because 00_dq_config replaces the
+# production log_step function with the DQ experiment logger.
+DQ_GOLD_SOURCE_TABLE = t("silver_pm25_daily")
+DQ_GOLD_GATE = t("dq_gold_gate")
+
+# COMMAND ----------
+
 from logging_utils import store_log
 
 SOURCE_FILE = "04_kpi_gold"
@@ -29,9 +41,46 @@ dbutils.widgets.dropdown(
     "rebuild_all", "false", ["false", "true"],
     "Rebuild all available dates"
 )
+dbutils.widgets.dropdown(
+    "require_dq_gate", "true", ["true", "false"],
+    "Run Gold only after the Silver DQ gate passes"
+)
 REBUILD_ALL = dbutils.widgets.get("rebuild_all") == "true"
+REQUIRE_DQ_GATE = dbutils.widgets.get("require_dq_gate") == "true"
 NEAR_KM = 100.0     # fire detections within this distance of a county's centre count as "nearby"
 PM25_DAILY_STANDARD = 35.0   # EPA 24-hour PM2.5 standard, ug/m3
+
+if REQUIRE_DQ_GATE:
+    if not spark.catalog.tableExists(DQ_GOLD_GATE):
+        raise ValueError(
+            f"Gold blocked: {DQ_GOLD_GATE} does not exist. "
+            "Run 03_dq_quality_gate.py after Silver first."
+        )
+    latest_gate = (spark.table(DQ_GOLD_GATE)
+        .where(F.col("table_name") == DQ_GOLD_SOURCE_TABLE)
+        .orderBy(F.col("evaluated_at_utc").desc())
+        .limit(1).collect())
+    if not latest_gate:
+        raise ValueError(
+            f"Gold blocked: no DQ decision exists for {DQ_GOLD_SOURCE_TABLE}."
+        )
+    gate = latest_gate[0]
+    if not bool(gate.passed):
+        raise ValueError(
+            f"Gold blocked: DQ gate failed for {DQ_GOLD_SOURCE_TABLE}; "
+            f"failed_columns={gate.failed_columns or '(unspecified)'}; "
+            f"run_id={gate.run_id}"
+        )
+    current_silver_version = int(
+        spark.sql(f"DESCRIBE HISTORY {DQ_GOLD_SOURCE_TABLE} LIMIT 1").first()["version"]
+    )
+    if int(gate.last_version) != current_silver_version:
+        raise ValueError(
+            f"Gold blocked: DQ decision is stale for {DQ_GOLD_SOURCE_TABLE}; "
+            f"checked_version={gate.last_version}, current_version={current_silver_version}. "
+            "Run 03_dq_quality_gate.py again."
+        )
+    print(f"DQ gate passed for {DQ_GOLD_SOURCE_TABLE} (run_id={gate.run_id})")
 
 started = time.time()
 
@@ -290,3 +339,13 @@ log_step(
 
 # COMMAND ----------
 
+# display(
+#     spark.sql(f"""
+#         SELECT f.date_local, c.county_name, f.fire_detections_within_100km,
+#                f.pm25_mean_ugm3, f.wind_mean_ms, f.smoke_indicator
+#         FROM {t('gold_fact_county_day')} f
+#         JOIN {t('gold_dim_county')} c USING (county_fips)
+#         ORDER BY f.date_local DESC, f.pm25_mean_ugm3 DESC NULLS LAST
+#         LIMIT 20
+#     """)
+# )
